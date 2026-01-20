@@ -1,179 +1,113 @@
 import discord
 from discord.ext import commands, tasks
-import os
-import json
-import random
 import requests
 from bs4 import BeautifulSoup
+import random
+import os
 
 # ================== ENV ==================
 TOKEN = os.getenv("TOKEN")
 if not TOKEN:
     raise RuntimeError("❌ Chưa set TOKEN")
 
-DATA_FILE = "config.json"
-CACHE_FILE = "cache.json"
+DATA_FILE = "channel.txt"
 INTERVAL_MINUTES = 30
 
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ================== LOAD / SAVE ==================
-def load_json(path, default):
-    if not os.path.exists(path):
-        return default
-    return json.load(open(path, "r", encoding="utf-8"))
+auto_dao = True
 
-def save_json(path, data):
-    json.dump(data, open(path, "w", encoding="utf-8"),
-              indent=2, ensure_ascii=False)
+# ================== TIỆN ÍCH ==================
+def save_channel(cid: int):
+    with open(DATA_FILE, "w") as f:
+        f.write(str(cid))
 
-config = load_json(DATA_FILE, {"channel_id": 0, "auto": True})
-cache = load_json(CACHE_FILE, {"texts": [], "images": []})
+def load_channel():
+    if not os.path.exists(DATA_FILE):
+        return None
+    with open(DATA_FILE, "r") as f:
+        return int(f.read().strip())
 
-# ================== CHẾ ĐẠO LÝ TIẾNG VIỆT ==================
-VIET_PREFIX = [
-    "🧘 Thầy tu nói:",
-    "📿 Đạo lý online:",
-    "🍃 Ngẫm mà xem:",
-    "😌 Tu rồi mới hiểu:",
-    "🙏 Phật dạy (phiên bản Discord):",
-    "🪷 Một phút tĩnh tâm:",
-]
+# ================== LẤY ĐẠO LÝ MEME ==================
+def get_dao_ly_vn():
+    try:
+        url = "https://sttchat.vn/stt-dao-ly-cuoc-song/"
+        html = requests.get(url, timeout=10).text
+        soup = BeautifulSoup(html, "html.parser")
 
-VIET_ENDING = [
-    "…ngẫm đi rồi hẵng cãi.",
-    "— tu chưa tới thì đừng cay.",
-    "— đọc xong nhớ thở.",
-    "— ai hiểu thì hiểu.",
-    "— không hợp thì lướt.",
-    "— đạo tới đây thôi."
-]
+        items = soup.find_all("p")
+        texts = [i.text.strip() for i in items if len(i.text.strip()) > 40]
 
-def viet_hoa_dao(eng_text: str):
-    """
-    Không dịch word-by-word.
-    Chế lại thành meme tiếng Việt cho hợp Discord.
-    """
-    eng_text = eng_text.strip()
+        meme = random.choice(texts)
+        return f"🧘 **Thầy Tu giảng đạo:**\n> {meme}"
+    except:
+        return "🙏 Tu hành gặp lỗi mạng, tâm vẫn phải tịnh."
 
-    # rút gọn cho hợp meme
-    if len(eng_text) > 120:
-        eng_text = eng_text[:120] + "..."
+# ================== ẢNH MEME ==================
+def get_meme_image():
+    return random.choice([
+        "https://i.imgur.com/9YQZ0YQ.jpg",
+        "https://i.imgur.com/6XGQH7m.jpg",
+        "https://i.imgur.com/Z7AzH2c.jpg",
+        "https://i.imgur.com/0y8Ftya.jpg"
+    ])
 
-    prefix = random.choice(VIET_PREFIX)
-    ending = random.choice(VIET_ENDING)
+# ================== TASK TỰ ĐỘNG ==================
+@tasks.loop(minutes=INTERVAL_MINUTES)
+async def auto_dao_task():
+    if not auto_dao:
+        return
 
-    return f"{prefix}\n**{eng_text}**\n{ending}"
+    cid = load_channel()
+    if not cid:
+        return
 
-# ================== FETCH ĐẠO LÝ GỐC ==================
-def fetch_texts():
-    url = "https://www.goodreads.com/quotes/tag/philosophy"
-    res = requests.get(url, timeout=10)
-    soup = BeautifulSoup(res.text, "html.parser")
+    channel = bot.get_channel(cid)
+    if not channel:
+        return
 
-    texts = []
-    for q in soup.select(".quoteText"):
-        t = q.get_text(strip=True).split("―")[0]
-        if len(t) > 40:
-            texts.append(viet_hoa_dao(t))
+    embed = discord.Embed(
+        description=get_dao_ly_vn(),
+        color=0xFFD966
+    )
+    embed.set_image(url=get_meme_image())
+    await channel.send(embed=embed)
 
-    random.shuffle(texts)
-    return texts
-
-# ================== FETCH ẢNH MEME ==================
-def fetch_images():
-    subs = ["memes", "wholesomememes", "buddhism", "philosophy"]
-    images = []
-
-    for sub in subs:
-        url = f"https://www.reddit.com/r/{sub}/top.json?limit=25&t=day"
-        headers = {"User-Agent": "thay-tu-meme-bot"}
-        res = requests.get(url, headers=headers, timeout=10)
-
-        if res.status_code != 200:
-            continue
-
-        for post in res.json()["data"]["children"]:
-            img = post["data"].get("url_overridden_by_dest", "")
-            if img.endswith((".jpg", ".png", ".jpeg")):
-                images.append(img)
-
-    random.shuffle(images)
-    return images
-
-# ================== GET MEME ==================
-def get_meme():
-    if not cache["texts"]:
-        cache["texts"] = fetch_texts()
-
-    if not cache["images"]:
-        cache["images"] = fetch_images()
-
-    text = cache["texts"].pop(0)
-    image = cache["images"].pop(0)
-
-    save_json(CACHE_FILE, cache)
-    return text, image
-
-# ================== READY ==================
+# ================== EVENT ==================
 @bot.event
 async def on_ready():
     print(f"🧘 Thầy Tu Meme online: {bot.user}")
-    if not giang_dao.is_running():
-        giang_dao.start()
+    if not auto_dao_task.is_running():
+        auto_dao_task.start()
 
-# ================== AUTO GIẢNG ĐẠO ==================
-@tasks.loop(minutes=INTERVAL_MINUTES)
-async def giang_dao():
-    if not config.get("auto", True):
-        return
+# ================== LỆNH ==================
+@bot.command()
+async def id(ctx, channel: discord.TextChannel):
+    save_channel(channel.id)
+    await ctx.send(f"✅ Đã set kênh giảng đạo: {channel.mention}")
 
-    channel_id = config.get("channel_id", 0)
-    if channel_id == 0:
-        return
-
-    channel = bot.get_channel(channel_id)
-    if not channel:
-        return
-
-    text, image = get_meme()
-    embed = discord.Embed(description=text, color=0x9bcb9b)
-    embed.set_image(url=image)
-
-    await channel.send(embed=embed)
-
-# ================== COMMANDS ==================
 @bot.command()
 async def dao(ctx):
-    text, image = get_meme()
-    embed = discord.Embed(description=text, color=0x9bcb9b)
-    embed.set_image(url=image)
+    embed = discord.Embed(
+        description=get_dao_ly_vn(),
+        color=0xFFD966
+    )
+    embed.set_image(url=get_meme_image())
     await ctx.send(embed=embed)
 
 @bot.command()
-@commands.has_permissions(administrator=True)
-async def id(ctx, channel: discord.TextChannel = None):
-    if not channel:
-        await ctx.send("❌ Dùng đúng: `!id #channel`")
-        return
-
-    config["channel_id"] = channel.id
-    save_json(DATA_FILE, config)
-    await ctx.send(f"📿 Đã set kênh giảng đạo: {channel.mention}")
+async def batdao(ctx):
+    global auto_dao
+    auto_dao = True
+    await ctx.send("✅ Đã **BẬT** chế độ giảng đạo 30 phút/lần")
 
 @bot.command()
 async def tatdao(ctx):
-    config["auto"] = False
-    save_json(DATA_FILE, config)
-    await ctx.send("⏸️ Thầy Tu nhập định")
-
-@bot.command()
-async def batdao(ctx):
-    config["auto"] = True
-    save_json(DATA_FILE, config)
-    await ctx.send("▶️ Thầy Tu tiếp tục giảng đạo")
+    global auto_dao
+    auto_dao = False
+    await ctx.send("⛔ Đã **TẮT** chế độ giảng đạo")
 
 # ================== RUN ==================
 bot.run(TOKEN)

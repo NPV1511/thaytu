@@ -30,7 +30,6 @@ DAO_LY = [
     "🧠 Khôn không phải nói hay, mà là biết lúc nào nên câm.",
     "🕯️ Im lặng không phải thua, là không thèm chơi.",
     "📵 Online nhiều chỉ làm rõ một điều: ai cũng rảnh miệng.",
-
     "😌 Thầy tu không ghét ai, chỉ tránh xa cho khỏe.",
     "🙃 Không phải ai cười cũng thân, có người cười vì thấy bạn ngu.",
     "📿 Người làm mình tổn thương thường không nhớ gì về mình.",
@@ -41,7 +40,6 @@ DAO_LY = [
     "📵 Seen không rep không phải vô lễ, mà là tự trọng.",
     "😌 Đừng cố chứng minh mình đúng với người không biết nghe.",
     "🙃 Nhiều người thích lời thật, nhưng chỉ khi nó không đụng họ.",
-
     "😈 Thầy tu nhìn thấu nhưng không vạch trần, vì không rảnh.",
     "📿 Không phải ai cũng xứng đáng với sự kiên nhẫn của bạn.",
     "🍃 Buông không phải thua, là không muốn lún sâu.",
@@ -52,7 +50,6 @@ DAO_LY = [
     "📵 Ít nói lại, bạn sẽ ít hối hận hơn.",
     "😈 Thầy tu không block ai, chỉ âm thầm mute.",
     "🧘 Tu là hiểu rằng: không cần ai công nhận.",
-
     "😌 Không phải ai cũng cần ở lại cuộc đời mình.",
     "🙃 Người không hợp, nói thêm chỉ tốn pin.",
     "📿 Đời đơn giản khi ta bớt kỳ vọng vào người khác.",
@@ -138,18 +135,14 @@ class DropView(discord.ui.View):
             self.left -= 1
             try:
                 await self.msg.edit(content=self.render(), view=self)
-            except discord.NotFound:
+            except:
                 return
 
         if not self.claimed:
             if self.clicked:
                 winner = random.choice(list(self.clicked))
                 await self.msg.edit(
-                    content=(
-                        f"🎲 **ROLL CUỐI**\n"
-                        f"🎁 **{self.gift}**\n"
-                        f"🎉 Chúc mừng {winner.mention}"
-                    ),
+                    content=f"🎲 **ROLL CUỐI**\n🎁 **{self.gift}**\n🎉 Chúc mừng {winner.mention}",
                     view=None,
                     allowed_mentions=discord.AllowedMentions(users=True)
                 )
@@ -161,34 +154,40 @@ class DropView(discord.ui.View):
 
     @discord.ui.button(label="🎁 Nhặt quà", style=discord.ButtonStyle.success)
     async def pick(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
+        user = interaction.user
 
-        async with self.lock:
-            if interaction.user in self.clicked:
-                return await interaction.followup.send("❌ Bạn đã nhặt rồi", ephemeral=True)
+        if user in self.clicked:
+            await interaction.response.send_message("❌ Bạn đã nhặt rồi!", ephemeral=True)
+            return
 
-            self.clicked.add(interaction.user)
-            await asyncio.sleep(random.randint(1, 3))
+        self.clicked.add(user)
 
-            if self.claimed or self.left <= 0:
-                msg = await interaction.followup.send("💨 Hụt rồi", ephemeral=True)
-                await asyncio.sleep(30)
-                return await msg.delete()
+        # ✅ PHẢN HỒI NGAY – KHÔNG LOADING
+        await interaction.response.send_message("⏳ Đang nhặt thính...", ephemeral=True)
 
-            if random.random() <= 0.2:
-                self.claimed = True
-                await self.msg.edit(
-                    content=(
-                        f"🎉 **TRÚNG THƯỞNG** 🎉\n"
-                        f"{interaction.user.mention} nhận **{self.gift}**"
-                    ),
-                    view=None,
-                    allowed_mentions=discord.AllowedMentions(users=True)
-                )
-            else:
-                msg = await interaction.followup.send("😢 Nhặt hụt rồi", ephemeral=True)
-                await asyncio.sleep(30)
-                await msg.delete()
+        async def process():
+            async with self.lock:
+                await asyncio.sleep(random.randint(1, 3))
+
+                if self.claimed or self.left <= 0:
+                    return
+
+                if random.random() <= 0.2:
+                    self.claimed = True
+                    await self.msg.edit(
+                        content=f"🎉 **TRÚNG THƯỞNG** 🎉\n{user.mention} nhận **{self.gift}**",
+                        view=None,
+                        allowed_mentions=discord.AllowedMentions(users=True)
+                    )
+                else:
+                    try:
+                        msg = await interaction.followup.send("😢 Nhặt hụt rồi...", ephemeral=True)
+                        await asyncio.sleep(30)
+                        await msg.delete()
+                    except:
+                        pass
+
+        asyncio.create_task(process())
 
 # ================== SLASH COMMAND DROP ==================
 @bot.tree.command(name="drop", description="Drop phần quà")
@@ -219,13 +218,13 @@ async def dao(ctx):
 async def batdao(ctx):
     global auto_dao
     auto_dao = True
-    await ctx.send("✅ Đã **BẬT** giảng đạo tự động")
+    await ctx.send("✅ Đã BẬT giảng đạo")
 
 @bot.command()
 async def tatdao(ctx):
     global auto_dao
     auto_dao = False
-    await ctx.send("⛔ Đã **TẮT** giảng đạo tự động")
+    await ctx.send("⛔ Đã TẮT giảng đạo")
 
 # ================== READY ==================
 @bot.event

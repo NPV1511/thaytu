@@ -15,7 +15,9 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ================== ĐẠO LÝ THẦY TU – MẶN SIÊU CẤP ==================
+auto_dao = True
+
+# ================== ĐẠO LÝ MẶN SIÊU CẤP ==================
 DAO_LY = [
     "😈 Tu rồi mới hiểu: không phải ai im lặng cũng hiền, có người coi bạn không đáng nói.",
     "🧘 Thầy tu không sân si, chỉ là không muốn phí não cho người không hiểu.",
@@ -85,14 +87,18 @@ def next_dao():
     i = load_index()
     text = DAO_LY[i % len(DAO_LY)]
     save_index(i + 1)
-    return f"🧘 **Thầy Tu giảng đạo (mặn siêu cấp):**\n{text}"
+    return text
 
 # ================== AUTO TASK ==================
 @tasks.loop(minutes=INTERVAL_MINUTES)
 async def auto_dao_task():
+    if not auto_dao:
+        return
+
     cid = load_channel()
     if not cid:
         return
+
     channel = bot.get_channel(cid)
     if channel:
         await channel.send(next_dao())
@@ -100,7 +106,7 @@ async def auto_dao_task():
 # ================== EVENT ==================
 @bot.event
 async def on_ready():
-    print(f"😈 Thầy Tu Mặn Siêu Cấp online: {bot.user}")
+    print(f"😈 Thầy Tu Mặn online: {bot.user}")
     if not auto_dao_task.is_running():
         auto_dao_task.start()
 
@@ -108,11 +114,23 @@ async def on_ready():
 @bot.command()
 async def id(ctx, channel: discord.TextChannel):
     save_channel(channel.id)
-    await ctx.send(f"✅ Đã set kênh giảng đạo: {channel.mention}")
+    await ctx.send(f"✅ Đã set kênh: {channel.mention}")
 
 @bot.command()
 async def dao(ctx):
     await ctx.send(next_dao())
+
+@bot.command()
+async def batdao(ctx):
+    global auto_dao
+    auto_dao = True
+    await ctx.send("✅ Đã **BẬT** giảng đạo tự động")
+
+@bot.command()
+async def tatdao(ctx):
+    global auto_dao
+    auto_dao = False
+    await ctx.send("⛔ Đã **TẮT** giảng đạo tự động")
 
 # ================== RUN ==================
 bot.run(TOKEN)

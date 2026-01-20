@@ -1,24 +1,14 @@
 import discord
-from discord.ext import commands, tasks
+from discord.ext import commands
 from discord import app_commands
-import os, random, asyncio
+import asyncio, random, os, time
 
-# ================== ENV ==================
+# ================== TOKEN ==================
 TOKEN = os.getenv("TOKEN")
 if not TOKEN:
-    raise RuntimeError("❌ Chưa set TOKEN")
+    raise RuntimeError("❌ Chưa set TOKEN trên Railway")
 
-DATA_FILE = "channel.txt"
-INDEX_FILE = "index.txt"
-INTERVAL_MINUTES = 30
-
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-auto_dao = True
-
-# ================== ĐẠO LÝ MẶN (GIỮ NGUYÊN 100%) ==================
+# ================== DAO LY (GIỮ NGUYÊN) ==================
 DAO_LY = [
     "😈 Tu rồi mới hiểu: không phải ai im lặng cũng hiền, có người coi bạn không đáng nói.",
     "🧘 Thầy tu không sân si, chỉ là không muốn phí não cho người không hiểu.",
@@ -62,177 +52,99 @@ DAO_LY = [
     "🧘 Và tỉnh rồi thì… bớt ngu vì người khác."
 ]
 
-# ================== SAVE / LOAD ==================
-def save_channel(cid):
-    with open(DATA_FILE, "w") as f:
-        f.write(str(cid))
-
-def load_channel():
-    if not os.path.exists(DATA_FILE):
-        return None
-    return int(open(DATA_FILE).read())
-
-def load_index():
-    if not os.path.exists(INDEX_FILE):
-        return 0
-    return int(open(INDEX_FILE).read())
-
-def save_index(i):
-    with open(INDEX_FILE, "w") as f:
-        f.write(str(i))
-
-def next_dao():
-    i = load_index()
-    text = DAO_LY[i % len(DAO_LY)]
-    save_index(i + 1)
-    return text
-
-# ================== AUTO ĐẠO ==================
-@tasks.loop(minutes=INTERVAL_MINUTES)
-async def auto_dao_task():
-    if not auto_dao:
-        return
-    cid = load_channel()
-    if cid:
-        channel = bot.get_channel(cid)
-        if channel:
-            await channel.send(next_dao())
+# ================== BOT ==================
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix="!", intents=intents)
 
 # ================== DROP VIEW ==================
 class DropView(discord.ui.View):
     def __init__(self, gift, duration):
-        super().__init__(timeout=None)
+        super().__init__(timeout=duration)
         self.gift = gift
-        self.total = duration
-        self.left = duration
+        self.end_time = time.time() + duration
         self.clicked = set()
+        self.processing = set()
         self.claimed = False
-        self.lock = asyncio.Lock()
         self.msg = None
+        self.lock = asyncio.Lock()
 
-    def bar(self):
-        ratio = self.left / self.total if self.total else 0
-        filled = max(0, min(10, int(ratio * 10)))
-        return "█" * filled + "░" * (10 - filled)
+    def time_left(self):
+        left = max(0, int(self.end_time - time.time()))
+        if left >= 3600:
+            return f"{left//3600}h"
+        if left >= 60:
+            return f"{left//60}m"
+        return f"{left}s"
 
-    def timefmt(self):
-        m, s = divmod(self.left, 60)
-        h, m = divmod(m, 60)
-        return f"{h:02}:{m:02}:{s:02}" if h else f"{m:02}:{s:02}"
+    def progress_bar(self):
+        total = 10
+        left = max(0, self.end_time - time.time())
+        percent = left / self.timeout
+        filled = int(percent * total)
+        return "█" * filled + "░" * (total - filled)
 
-    def render(self):
-        return (
-            f"💥 **DROP PHẦN QUÀ**\n"
-            f"🎁 **{self.gift}**\n"
-            f"⏳ `{self.timefmt()}`\n"
-            f"`{self.bar()}`\n"
-            f"👇 Nhấn để nhặt"
-        )
-
-    async def countdown(self):
-        while self.left > 0 and not self.claimed:
-            await asyncio.sleep(1)
-            self.left -= 1
-            try:
-                await self.msg.edit(content=self.render(), view=self)
-            except:
-                return
-
-        if not self.claimed:
-            if self.clicked:
-                winner = random.choice(list(self.clicked))
-                await self.msg.edit(
-                    content=f"🎲 **ROLL CUỐI**\n🎁 **{self.gift}**\n🎉 Chúc mừng {winner.mention}",
-                    view=None,
-                    allowed_mentions=discord.AllowedMentions(users=True)
-                )
-            else:
-                await self.msg.edit(
-                    content=f"⌛ **DROP HẾT HẠN**\n🎁 {self.gift}\n❌ Không ai nhặt",
-                    view=None
-                )
+    async def on_timeout(self):
+        if not self.claimed and self.clicked:
+            winner = random.choice(list(self.clicked))
+            await self.msg.edit(
+                content=f"⏰ **HẾT GIỜ DROP**\n🎉 <@{winner}> nhận **{self.gift}**\n\n📿 {random.choice(DAO_LY)}",
+                view=None
+            )
+        elif not self.clicked:
+            await self.msg.edit(content="❌ Drop kết thúc nhưng không ai tham gia.", view=None)
 
     @discord.ui.button(label="🎁 Nhặt quà", style=discord.ButtonStyle.success)
     async def pick(self, interaction: discord.Interaction, button: discord.ui.Button):
-        user = interaction.user
+        uid = interaction.user.id
 
-        if user in self.clicked:
+        if uid in self.clicked or uid in self.processing:
             await interaction.response.send_message("❌ Bạn đã nhặt rồi!", ephemeral=True)
             return
 
-        self.clicked.add(user)
-
-        # ✅ PHẢN HỒI NGAY – KHÔNG LOADING
+        self.processing.add(uid)
         await interaction.response.send_message("⏳ Đang nhặt thính...", ephemeral=True)
 
         async def process():
             async with self.lock:
                 await asyncio.sleep(random.randint(1, 3))
+                self.processing.discard(uid)
+                self.clicked.add(uid)
 
-                if self.claimed or self.left <= 0:
+                if self.claimed:
                     return
 
                 if random.random() <= 0.2:
                     self.claimed = True
                     await self.msg.edit(
-                        content=f"🎉 **TRÚNG THƯỞNG** 🎉\n{user.mention} nhận **{self.gift}**",
-                        view=None,
-                        allowed_mentions=discord.AllowedMentions(users=True)
+                        content=f"🎉 **TRÚNG THƯỞNG** 🎉\n{interaction.user.mention} nhận **{self.gift}**\n\n📿 {random.choice(DAO_LY)}",
+                        view=None
                     )
                 else:
-                    try:
-                        msg = await interaction.followup.send("😢 Nhặt hụt rồi...", ephemeral=True)
-                        await asyncio.sleep(30)
-                        await msg.delete()
-                    except:
-                        pass
+                    await interaction.followup.send("😢 Nhặt hụt rồi...", ephemeral=True)
 
         asyncio.create_task(process())
 
-# ================== SLASH COMMAND DROP ==================
+# ================== SLASH COMMAND ==================
 @bot.tree.command(name="drop", description="Drop phần quà")
-@app_commands.describe(phan_qua="Tên phần quà", time="Thời gian", unit="Đơn vị")
-@app_commands.choices(unit=[
-    app_commands.Choice(name="Giây", value=1),
-    app_commands.Choice(name="Phút", value=60),
-    app_commands.Choice(name="Giờ", value=3600),
-])
-async def drop(interaction: discord.Interaction, phan_qua: str, time: int, unit: app_commands.Choice[int]):
-    duration = time * unit.value
-    view = DropView(phan_qua, duration)
-    await interaction.response.send_message(view.render(), view=view)
+@app_commands.describe(phan_qua="Tên phần quà", time="Thời gian", unit="s / m / h")
+async def drop(interaction: discord.Interaction, phan_qua: str, time: int, unit: str):
+    if unit not in ["s", "m", "h"]:
+        await interaction.response.send_message("❌ unit chỉ s / m / h", ephemeral=True)
+        return
+
+    seconds = time * (60 if unit == "m" else 3600 if unit == "h" else 1)
+    view = DropView(phan_qua, seconds)
+
+    await interaction.response.send_message(
+        f"🎁 **DROP PHẦN QUÀ** 🎁\n🎁 Quà: **{phan_qua}**\n⏳ Time left: {view.time_left()}\n{view.progress_bar()}",
+        view=view
+    )
     view.msg = await interaction.original_response()
-    asyncio.create_task(view.countdown())
-
-# ================== COMMAND ĐẠO ==================
-@bot.command()
-async def id(ctx, channel: discord.TextChannel):
-    save_channel(channel.id)
-    await ctx.send(f"✅ Đã set kênh: {channel.mention}")
-
-@bot.command()
-async def dao(ctx):
-    await ctx.send(next_dao())
-
-@bot.command()
-async def batdao(ctx):
-    global auto_dao
-    auto_dao = True
-    await ctx.send("✅ Đã BẬT giảng đạo")
-
-@bot.command()
-async def tatdao(ctx):
-    global auto_dao
-    auto_dao = False
-    await ctx.send("⛔ Đã TẮT giảng đạo")
 
 # ================== READY ==================
 @bot.event
 async def on_ready():
     await bot.tree.sync()
-    print(f"😈 Thầy Tu Mặn online: {bot.user}")
-    if not auto_dao_task.is_running():
-        auto_dao_task.start()
+    print(f"✅ Bot online: {bot.user}")
 
-# ================== RUN ==================
 bot.run(TOKEN)

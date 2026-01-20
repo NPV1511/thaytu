@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands, tasks
-import os
+from discord import app_commands
+import os, random, asyncio
 
 # ================== ENV ==================
 TOKEN = os.getenv("TOKEN")
@@ -17,7 +18,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 auto_dao = True
 
-# ================== ĐẠO LÝ MẶN SIÊU CẤP ==================
+# ================== ĐẠO LÝ MẶN (GIỮ NGUYÊN 100%) ==================
 DAO_LY = [
     "😈 Tu rồi mới hiểu: không phải ai im lặng cũng hiền, có người coi bạn không đáng nói.",
     "🧘 Thầy tu không sân si, chỉ là không muốn phí não cho người không hiểu.",
@@ -89,28 +90,122 @@ def next_dao():
     save_index(i + 1)
     return text
 
-# ================== AUTO TASK ==================
+# ================== AUTO ĐẠO ==================
 @tasks.loop(minutes=INTERVAL_MINUTES)
 async def auto_dao_task():
     if not auto_dao:
         return
-
     cid = load_channel()
-    if not cid:
-        return
+    if cid:
+        channel = bot.get_channel(cid)
+        if channel:
+            await channel.send(next_dao())
 
-    channel = bot.get_channel(cid)
-    if channel:
-        await channel.send(next_dao())
+# ================== DROP VIEW ==================
+class DropView(discord.ui.View):
+    def __init__(self, gift, duration):
+        super().__init__(timeout=None)
+        self.gift = gift
+        self.total = duration
+        self.left = duration
+        self.clicked = set()
+        self.claimed = False
+        self.lock = asyncio.Lock()
+        self.msg = None
 
-# ================== EVENT ==================
-@bot.event
-async def on_ready():
-    print(f"😈 Thầy Tu Mặn online: {bot.user}")
-    if not auto_dao_task.is_running():
-        auto_dao_task.start()
+    def bar(self):
+        ratio = self.left / self.total if self.total else 0
+        filled = max(0, min(10, int(ratio * 10)))
+        return "█" * filled + "░" * (10 - filled)
 
-# ================== COMMAND ==================
+    def timefmt(self):
+        m, s = divmod(self.left, 60)
+        h, m = divmod(m, 60)
+        return f"{h:02}:{m:02}:{s:02}" if h else f"{m:02}:{s:02}"
+
+    def render(self):
+        return (
+            f"💥 **DROP PHẦN QUÀ**\n"
+            f"🎁 **{self.gift}**\n"
+            f"⏳ `{self.timefmt()}`\n"
+            f"`{self.bar()}`\n"
+            f"👇 Nhấn để nhặt"
+        )
+
+    async def countdown(self):
+        while self.left > 0 and not self.claimed:
+            await asyncio.sleep(1)
+            self.left -= 1
+            try:
+                await self.msg.edit(content=self.render(), view=self)
+            except discord.NotFound:
+                return
+
+        if not self.claimed:
+            if self.clicked:
+                winner = random.choice(list(self.clicked))
+                await self.msg.edit(
+                    content=(
+                        f"🎲 **ROLL CUỐI**\n"
+                        f"🎁 **{self.gift}**\n"
+                        f"🎉 Chúc mừng {winner.mention}"
+                    ),
+                    view=None,
+                    allowed_mentions=discord.AllowedMentions(users=True)
+                )
+            else:
+                await self.msg.edit(
+                    content=f"⌛ **DROP HẾT HẠN**\n🎁 {self.gift}\n❌ Không ai nhặt",
+                    view=None
+                )
+
+    @discord.ui.button(label="🎁 Nhặt quà", style=discord.ButtonStyle.success)
+    async def pick(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+
+        async with self.lock:
+            if interaction.user in self.clicked:
+                return await interaction.followup.send("❌ Bạn đã nhặt rồi", ephemeral=True)
+
+            self.clicked.add(interaction.user)
+            await asyncio.sleep(random.randint(1, 3))
+
+            if self.claimed or self.left <= 0:
+                msg = await interaction.followup.send("💨 Hụt rồi", ephemeral=True)
+                await asyncio.sleep(30)
+                return await msg.delete()
+
+            if random.random() <= 0.2:
+                self.claimed = True
+                await self.msg.edit(
+                    content=(
+                        f"🎉 **TRÚNG THƯỞNG** 🎉\n"
+                        f"{interaction.user.mention} nhận **{self.gift}**"
+                    ),
+                    view=None,
+                    allowed_mentions=discord.AllowedMentions(users=True)
+                )
+            else:
+                msg = await interaction.followup.send("😢 Nhặt hụt rồi", ephemeral=True)
+                await asyncio.sleep(30)
+                await msg.delete()
+
+# ================== SLASH COMMAND DROP ==================
+@bot.tree.command(name="drop", description="Drop phần quà")
+@app_commands.describe(phan_qua="Tên phần quà", time="Thời gian", unit="Đơn vị")
+@app_commands.choices(unit=[
+    app_commands.Choice(name="Giây", value=1),
+    app_commands.Choice(name="Phút", value=60),
+    app_commands.Choice(name="Giờ", value=3600),
+])
+async def drop(interaction: discord.Interaction, phan_qua: str, time: int, unit: app_commands.Choice[int]):
+    duration = time * unit.value
+    view = DropView(phan_qua, duration)
+    await interaction.response.send_message(view.render(), view=view)
+    view.msg = await interaction.original_response()
+    asyncio.create_task(view.countdown())
+
+# ================== COMMAND ĐẠO ==================
 @bot.command()
 async def id(ctx, channel: discord.TextChannel):
     save_channel(channel.id)
@@ -131,6 +226,14 @@ async def tatdao(ctx):
     global auto_dao
     auto_dao = False
     await ctx.send("⛔ Đã **TẮT** giảng đạo tự động")
+
+# ================== READY ==================
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print(f"😈 Thầy Tu Mặn online: {bot.user}")
+    if not auto_dao_task.is_running():
+        auto_dao_task.start()
 
 # ================== RUN ==================
 bot.run(TOKEN)
